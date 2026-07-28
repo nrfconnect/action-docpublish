@@ -1,0 +1,91 @@
+name: 'Documentation Publish'
+
+description: Publish documentation to azure.
+
+inputs:
+  doc-subdir:
+    description: 'Subdirectory where the docs should be placed'
+    default: 'ncs'
+  doc-zip-name:
+    description: 'Name of zip with documentation (can contain wildcards)'
+    default: 'legacy-ncs*.zip'
+  workflow:
+    description: 'Workflow file that produced the documentation artifacts.'
+    required: false
+    default: 'docbuild.yml'
+  storage-url:
+    description: 'Azure storage container URL to upload the docs to.'
+    required: true
+  storage-url-pr:
+    description: 'Azure storage container uRL for upload of PR docs.'
+    required: true
+  storage-sas:
+    description: 'SAS token for prod builds.'
+    required: true
+  storage-pr-sas:
+    description: 'SAS token for pr builds.'
+    required: true
+  doc-url:
+    description: "Url of doc storage for PR's preview"
+    default: "https://ncsbmdoc.z6.web.core.windows.net/"
+
+runs:
+  using: composite
+  steps:
+    - name: Download artifacts
+      uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
+      with:
+        workflow: ${{ inputs.workflow }}
+        run_id: ${{  github.event.workflow_run.id }}
+        github_token: ${{ github.token }}
+    - name: Unzip html archive
+      shell: bash
+      working-directory: docs
+      id: unzip
+      run: |
+        OUTDIR=${{ inputs.doc-subdir }}/$(awk 'NR==1 { if ($3 ~ /^(latest|PR-[0-9]+|[0-9]+\.[0-9a-zA-Z\.\-]+)$/) print $3 }' monitor_*.txt)
+        mkdir -p "$OUTDIR"
+        echo "OUTDIR=$OUTDIR" >> "$GITHUB_ENV"
+        unzip ${{ inputs.doc-zip-name }} -d $OUTDIR
+        find "$OUTDIR" -type l -delete
+    - name: Obtain PR number
+      shell: bash
+      working-directory: docs
+      run: |
+        if [ -f pr.txt ]; then
+          PR=$(head -n 1 pr.txt | tr -cd '0-9')
+        fi
+        printf 'PR=%s\n' "$PR" >> "$GITHUB_ENV"
+    - name: Upload to Azure storage
+      shell: bash
+      working-directory: docs
+      env:
+        AZCOPY_CONCURRENCY_VALUE: 1024
+        NCS_DOC_SAS_PRS: ${{ inputs.storage-pr-sas }}
+        NCS_DOC_SAS_MAIN: ${{ inputs.storage-sas }}
+      run: |
+        if [[ "${{ github.event.workflow_run.event }}" == "pull_request" ]]; then
+          NCS_DOC_STORAGE_URL="${{ inputs.storage-url-pr }}"
+          azcopy cp $OUTDIR "${NCS_DOC_STORAGE_URL}${{ inputs.doc-subdir }}?${NCS_DOC_SAS_PRS}" --recursive=true
+        else
+          NCS_DOC_STORAGE_URL="${{ inputs.storage-url }}"
+          azcopy cp $OUTDIR "${NCS_DOC_STORAGE_URL}${{ inputs.doc-subdir }}?${NCS_DOC_SAS_MAIN}" --recursive=true
+        fi
+    - name: Find Comment
+      if: ${{ github.event.workflow_run.event == 'pull_request' }}
+      uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e # v3
+      id: fc
+      with:
+        issue-number: ${{ env.PR }}
+        comment-author: 'github-actions[bot]'
+        body-includes: documentation preview
+
+    - name: Create or update comment
+      if: ${{ github.event.workflow_run.event == 'pull_request' }}
+      uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4
+      with:
+        comment-id: ${{ steps.fc.outputs.comment-id }}
+        issue-number: ${{ env.PR }}
+        body: |
+          You can find the documentation preview for this PR [here](${{ inputs.doc-url }}${{ inputs.doc-subdir }}/PR-${{ env.PR }}/).
+        edit-mode: replace
