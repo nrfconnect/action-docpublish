@@ -23,9 +23,6 @@ inputs:
     required: true
   storage-pr-sas:
     description: 'SAS token for pr builds.'
-  doc-url:
-    description: "Url of doc storage for PR's preview"
-    default: "https://ncsbmdoc.z6.web.core.windows.net/"
   publish-pr:
     description: "If true, publish PR builds"
     default: true
@@ -110,6 +107,5 @@ runs:
         token: ${{ inputs.github-token }}
         comment-id: ${{ steps.fc.outputs.comment-id }}
         issue-number: ${{ env.PR }}
-        body: |
-          You can find the documentation preview for this PR [here](${{ inputs.doc-url }}${{ inputs.doc-subdir }}/PR-${{ env.PR }}/).
+        body-path: docs/comment.txt
         edit-mode: replace
